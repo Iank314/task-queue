@@ -1,0 +1,8 @@
+aiohttp
+sqlalchemy[asyncio]
+asyncpg
+pydantic
+pytest
+pytest-asyncio
+pytest-aiohttp
+aiohttp[client]
