@@ -5,4 +5,5 @@ pydantic
 pytest
 pytest-asyncio
 pytest-aiohttp
+pytest-cov
 aiohttp[client]
