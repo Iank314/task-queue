@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Task Queue Dashboard</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #242834;
+    --border: #2e3240;
+    --text: #e1e4ed;
+    --text-dim: #8b8fa3;
+    --accent: #6c8aff;
+    --accent-hover: #8aa2ff;
+    --green: #3dd68c;
+    --yellow: #f0c645;
+    --red: #f06868;
+    --orange: #e8944a;
+    --radius: 8px;
+  }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+    padding: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 24px; }
+  h2 { font-size: 1.1rem; font-weight: 600; margin-bottom: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.8rem; }
+
+  /* Metric cards */
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin-bottom: 32px;
+  }
+
+  .metric-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    text-align: center;
+  }
+
+  .metric-card .label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+
+  .metric-card .value {
+    font-size: 2rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .metric-card.pending .value  { color: var(--yellow); }
+  .metric-card.running .value  { color: var(--accent); }
+  .metric-card.completed .value { color: var(--green); }
+  .metric-card.failed .value   { color: var(--red); }
+  .metric-card.cancelled .value { color: var(--orange); }
+
+  /* Two-column layout */
+  .columns {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+
+  @media (max-width: 800px) {
+    .columns { grid-template-columns: 1fr; }
+  }
+
+  /* Form panel */
+  .panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+  }
+
+  label {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+    margin-top: 12px;
+  }
+
+  label:first-child { margin-top: 0; }
+
+  select, input, textarea {
+    width: 100%;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+
+  select:focus, input:focus, textarea:focus {
+    border-color: var(--accent);
+  }
+
+  textarea { resize: vertical; min-height: 80px; font-family: 'Consolas', 'Monaco', monospace; font-size: 0.82rem; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    margin-top: 16px;
+    width: 100%;
+  }
+
+  .btn-primary:hover { background: var(--accent-hover); }
+
+  .btn-cancel {
+    background: transparent;
+    color: var(--red);
+    border: 1px solid var(--red);
+    padding: 3px 10px;
+    font-size: 0.75rem;
+  }
+
+  .btn-cancel:hover { background: rgba(240,104,104,0.12); }
+
+  .btn-filter {
+    background: var(--surface2);
+    color: var(--text-dim);
+    padding: 5px 12px;
+    font-size: 0.78rem;
+    margin-right: 4px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+  }
+
+  .btn-filter:hover { border-color: var(--accent); color: var(--text); }
+  .btn-filter.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* Table */
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  th {
+    text-align: left;
+    padding: 10px 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--border);
+  }
+
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+
+  tr.job-row { cursor: pointer; transition: background 0.1s; }
+  tr.job-row:hover { background: var(--surface2); }
+
+  .status-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .status-pending   { background: rgba(240,198,69,0.15); color: var(--yellow); }
+  .status-running   { background: rgba(108,138,255,0.15); color: var(--accent); }
+  .status-completed { background: rgba(61,214,140,0.15); color: var(--green); }
+  .status-failed    { background: rgba(240,104,104,0.15); color: var(--red); }
+  .status-cancelled { background: rgba(232,148,74,0.15); color: var(--orange); }
+
+  .id-col {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
+
+  .empty-msg {
+    text-align: center;
+    padding: 32px;
+    color: var(--text-dim);
+  }
+
+  /* Modal */
+  .modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 100;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .modal-overlay.open { display: flex; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    width: 560px;
+    max-width: 92vw;
+    max-height: 80vh;
+    overflow-y: auto;
+  }
+
+  .modal h2 { margin-bottom: 16px; text-transform: none; font-size: 1rem; letter-spacing: 0; color: var(--text); }
+
+  .modal .close-btn {
+    float: right;
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-size: 1.4rem;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  .modal .close-btn:hover { color: var(--text); }
+
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 8px 12px;
+    font-size: 0.85rem;
+  }
+
+  .detail-grid dt { color: var(--text-dim); font-weight: 500; }
+  .detail-grid dd { word-break: break-all; }
+
+  .detail-grid pre {
+    background: var(--surface2);
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-family: 'Consolas', 'Monaco', monospace;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    z-index: 200;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.2s, transform 0.2s;
+  }
+
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.success { background: var(--green); color: #0f1117; }
+  .toast.error { background: var(--red); color: #fff; }
+</style>
+</head>
+<body>
+
+<h1>Task Queue Dashboard</h1>
+
+<!-- Metrics -->
+<div class="metrics" id="metrics">
+  <div class="metric-card pending"><div class="label">Pending</div><div class="value" id="m-pending">-</div></div>
+  <div class="metric-card running"><div class="label">Running</div><div class="value" id="m-running">-</div></div>
+  <div class="metric-card completed"><div class="label">Completed</div><div class="value" id="m-completed">-</div></div>
+  <div class="metric-card failed"><div class="label">Failed</div><div class="value" id="m-failed">-</div></div>
+  <div class="metric-card cancelled"><div class="label">Cancelled</div><div class="value" id="m-cancelled">-</div></div>
+</div>
+
+<div class="columns">
+  <!-- Submit job form -->
+  <div class="panel">
+    <h2>Submit Job</h2>
+    <form id="job-form" autocomplete="off">
+      <label for="job-type">Type</label>
+      <select id="job-type">
+        <option value="send_email">send_email</option>
+        <option value="process_data">process_data</option>
+      </select>
+
+      <label for="job-payload">Payload (JSON)</label>
+      <textarea id="job-payload" placeholder='{"to": "user@example.com"}'>{}</textarea>
+
+      <label for="job-priority">Priority</label>
+      <input id="job-priority" type="number" value="0" min="0" max="100">
+
+      <button type="submit" class="btn btn-primary">Submit Job</button>
+    </form>
+  </div>
+
+  <!-- Job list -->
+  <div>
+    <h2>Jobs</h2>
+    <div style="margin-bottom: 8px;">
+      <button class="btn btn-filter active" data-status="">All</button>
+      <button class="btn btn-filter" data-status="pending">Pending</button>
+      <button class="btn btn-filter" data-status="running">Running</button>
+      <button class="btn btn-filter" data-status="completed">Completed</button>
+      <button class="btn btn-filter" data-status="failed">Failed</button>
+      <button class="btn btn-filter" data-status="cancelled">Cancelled</button>
+    </div>
+    <div class="panel table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Priority</th>
+            <th>Attempts</th>
+            <th>Created</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="job-tbody">
+          <tr><td colspan="7" class="empty-msg">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Detail modal -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal">
+    <button class="close-btn" id="modal-close">&times;</button>
+    <h2>Job Details</h2>
+    <dl class="detail-grid" id="detail-grid"></dl>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+const API = 'http://localhost:8000';
+let currentFilter = '';
+let refreshTimer = null;
+
+// --- Helpers ---
+function $(sel) { return document.querySelector(sel); }
+function $$(sel) { return document.querySelectorAll(sel); }
+
+function showToast(msg, type) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast ' + type + ' show';
+  clearTimeout(t._tid);
+  t._tid = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function shortId(id) {
+  return id.substring(0, 8);
+}
+
+function formatDate(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+async function api(method, path, body) {
+  const opts = { method, headers: {} };
+  if (body !== undefined) {
+    opts.headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(body);
+  }
+  const r = await fetch(API + path, opts);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${r.status}`);
+  }
+  if (r.status === 204) return null;
+  return r.json();
+}
+
+// --- Metrics ---
+async function loadMetrics() {
+  try {
+    const data = await api('GET', '/metrics');
+    for (const s of ['pending', 'running', 'completed', 'failed', 'cancelled']) {
+      $(`#m-${s}`).textContent = data[s] || 0;
+    }
+  } catch (e) {
+    // silently retry on next cycle
+  }
+}
+
+// --- Job list ---
+async function loadJobs() {
+  try {
+    const qs = currentFilter ? `?status=${currentFilter}` : '';
+    const jobs = await api('GET', '/jobs' + qs);
+    const tbody = $('#job-tbody');
+
+    if (!jobs.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No jobs found</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = jobs.map(j => `
+      <tr class="job-row" data-id="${j.id}">
+        <td class="id-col" title="${j.id}">${shortId(j.id)}</td>
+        <td>${j.type}</td>
+        <td><span class="status-badge status-${j.status}">${j.status}</span></td>
+        <td>${j.priority}</td>
+        <td>${j.attempts}</td>
+        <td>${formatDate(j.created_at)}</td>
+        <td>${j.status === 'pending' ? '<button class="btn btn-cancel cancel-btn">Cancel</button>' : ''}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    // silently retry on next cycle
+  }
+}
+
+// --- Detail modal ---
+async function showDetail(id) {
+  try {
+    const j = await api('GET', `/jobs/${id}`);
+    const grid = $('#detail-grid');
+    const rows = [
+      ['ID', `<span class="id-col">${j.id}</span>`],
+      ['Type', j.type],
+      ['Status', `<span class="status-badge status-${j.status}">${j.status}</span>`],
+      ['Priority', j.priority],
+      ['Attempts', `${j.attempts} / ${j.max_attempts}`],
+      ['Payload', `<pre>${JSON.stringify(j.payload, null, 2)}</pre>`],
+    ];
+    if (j.result != null) rows.push(['Result', `<pre>${JSON.stringify(j.result, null, 2)}</pre>`]);
+    if (j.error != null) rows.push(['Error', `<pre style="color:var(--red)">${escHtml(j.error)}</pre>`]);
+
+    grid.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    $('#modal-overlay').classList.add('open');
+  } catch (e) {
+    showToast('Failed to load job details', 'error');
+  }
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function closeModal() {
+  $('#modal-overlay').classList.remove('open');
+}
+
+// --- Cancel ---
+async function cancelJob(id, e) {
+  e.stopPropagation();
+  try {
+    await api('DELETE', `/jobs/${id}`);
+    showToast('Job cancelled', 'success');
+    refresh();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+// --- Submit ---
+$('#job-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const type = $('#job-type').value;
+  const priority = parseInt($('#job-priority').value, 10) || 0;
+  let payload;
+  try {
+    payload = JSON.parse($('#job-payload').value);
+  } catch {
+    showToast('Invalid JSON payload', 'error');
+    return;
+  }
+  try {
+    const res = await api('POST', '/jobs', { type, payload, priority });
+    showToast(`Job created: ${shortId(res.id)}`, 'success');
+    $('#job-payload').value = '{}';
+    $('#job-priority').value = '0';
+    refresh();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+});
+
+// --- Filters ---
+$$('.btn-filter').forEach(btn => {
+  btn.addEventListener('click', () => {
+    $$('.btn-filter').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.status;
+    loadJobs();
+  });
+});
+
+// --- Table delegation ---
+$('#job-tbody').addEventListener('click', (e) => {
+  const cancelBtn = e.target.closest('.cancel-btn');
+  const row = e.target.closest('.job-row');
+  if (!row) return;
+  const id = row.dataset.id;
+  if (cancelBtn) {
+    cancelJob(id, e);
+    return;
+  }
+  showDetail(id);
+});
+
+// --- Modal close ---
+$('#modal-close').addEventListener('click', closeModal);
+$('#modal-overlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
+});
+
+// --- Refresh loop ---
+function refresh() {
+  loadMetrics();
+  loadJobs();
+}
+
+refresh();
+refreshTimer = setInterval(refresh, 3000);
+</script>
+</body>
+</html>
