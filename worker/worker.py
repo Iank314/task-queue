@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from contextlib import asynccontextmanager
-from broker.models import Base, Job
+from broker.models import Base, Job, DeadLetterJob
 from worker.handlers import HANDLERS
 import os
 
@@ -48,13 +48,25 @@ async def complete_job(session, job: Job, result: dict):
 async def fail_job(session, job: Job, error: str):
     job.error = error
     if job.attempts >= job.max_attempts:
-        job.status = "failed"
+        dead = DeadLetterJob(
+            original_job_id=job.id,
+            type=job.type,
+            payload=job.payload,
+            priority=job.priority,
+            attempts=job.attempts,
+            error=error,
+            created_at=job.created_at,
+        )
+        session.add(dead)
+        await session.delete(job)
+        await session.commit()
+        print(f"Job {job.id} moved to dead letter queue")
     else:
         job.status = "pending"
         delay = 2 ** job.attempts  # 2s, 4s, 8s
         job.run_after = datetime.now(timezone.utc) + timedelta(seconds=delay)
-    job.updated_at = datetime.now(timezone.utc)
-    await session.commit()
+        job.updated_at = datetime.now(timezone.utc)
+        await session.commit()
 
 
 async def run_worker():

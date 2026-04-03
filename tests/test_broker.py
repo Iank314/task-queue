@@ -144,13 +144,18 @@ class TestCancelJob:
 class TestMetrics:
     @pytest.mark.asyncio
     async def test_get_metrics(self, aiohttp_client):
-        mock_result = MagicMock()
-        mock_result.__iter__ = MagicMock(
+        mock_status_result = MagicMock()
+        mock_status_result.__iter__ = MagicMock(
             return_value=iter([("pending", 5), ("completed", 10)])
         )
 
+        mock_dl_result = MagicMock()
+        mock_dl_result.scalar.return_value = 2
+
         mock_session = AsyncMock()
-        mock_session.execute = AsyncMock(return_value=mock_result)
+        mock_session.execute = AsyncMock(
+            side_effect=[mock_status_result, mock_dl_result]
+        )
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
 
@@ -161,3 +166,4 @@ class TestMetrics:
             data = await resp.json()
             assert data["pending"] == 5
             assert data["completed"] == 10
+            assert data["dead_letter"] == 2

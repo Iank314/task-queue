@@ -16,3 +16,15 @@ CREATE TABLE jobs (
 CREATE INDEX idx_jobs_claimable
     ON jobs (priority DESC, created_at ASC)
     WHERE status = 'pending';
+
+CREATE TABLE dead_letter_jobs (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    original_job_id UUID NOT NULL,
+    type            TEXT NOT NULL,
+    payload         JSONB NOT NULL,
+    priority        INT NOT NULL DEFAULT 0,
+    attempts        INT NOT NULL,
+    error           TEXT,
+    created_at      TIMESTAMPTZ NOT NULL,
+    failed_at       TIMESTAMPTZ DEFAULT now()
+);

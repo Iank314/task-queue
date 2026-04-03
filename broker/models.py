@@ -24,3 +24,17 @@ class Job(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     run_after = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class DeadLetterJob(Base):
+    __tablename__ = "dead_letter_jobs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    original_job_id = Column(UUID(as_uuid=True), nullable=False)
+    type = Column(Text, nullable=False)
+    payload = Column(JSONB, nullable=False)
+    priority = Column(Integer, nullable=False, default=0)
+    attempts = Column(Integer, nullable=False)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    failed_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

@@ -79,15 +79,16 @@ class TestFailJob:
         session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_fail_job_marks_failed_when_max_attempts(self, mock_job):
+    async def test_fail_job_moves_to_dead_letter_when_max_attempts(self, mock_job):
         mock_job.attempts = 3
         mock_job.max_attempts = 3
+        mock_job.created_at = datetime.now(timezone.utc)
 
         session = AsyncMock()
         await fail_job(session, mock_job, "final error")
 
-        assert mock_job.status == "failed"
-        assert mock_job.error == "final error"
+        session.add.assert_called_once()
+        session.delete.assert_awaited_once_with(mock_job)
         session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio

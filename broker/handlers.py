@@ -1,6 +1,6 @@
 from aiohttp import web
 from broker.database import get_session
-from broker.models import Job
+from broker.models import Job, DeadLetterJob
 from sqlalchemy import func, select
 import uuid
 
@@ -85,4 +85,61 @@ async def get_metrics(request: web.Request) -> web.Response:
             select(Job.status, func.count()).group_by(Job.status)
         )
         counts = {status: count for status, count in rows}
+        dl_count = await session.execute(
+            select(func.count()).select_from(DeadLetterJob)
+        )
+        counts["dead_letter"] = dl_count.scalar() or 0
     return web.json_response(counts)
+
+
+async def list_dead_letter(request: web.Request) -> web.Response:
+    async with get_session() as session:
+        result = await session.execute(
+            select(DeadLetterJob).order_by(DeadLetterJob.failed_at.desc())
+        )
+        jobs = result.scalars().all()
+    return web.json_response(
+        [
+            {
+                "id": str(j.id),
+                "original_job_id": str(j.original_job_id),
+                "type": j.type,
+                "payload": j.payload,
+                "priority": j.priority,
+                "attempts": j.attempts,
+                "error": j.error,
+                "created_at": j.created_at.isoformat() if j.created_at else None,
+                "failed_at": j.failed_at.isoformat() if j.failed_at else None,
+            }
+            for j in jobs
+        ]
+    )
+
+
+async def retry_dead_letter(request: web.Request) -> web.Response:
+    dl_id = request.match_info["id"]
+    async with get_session() as session:
+        dl_job = await session.get(DeadLetterJob, uuid.UUID(dl_id))
+        if not dl_job:
+            raise web.HTTPNotFound()
+        new_job = Job(
+            type=dl_job.type,
+            payload=dl_job.payload,
+            priority=dl_job.priority,
+        )
+        session.add(new_job)
+        await session.delete(dl_job)
+        await session.commit()
+        await session.refresh(new_job)
+    return web.json_response({"id": str(new_job.id), "status": "pending"}, status=201)
+
+
+async def delete_dead_letter(request: web.Request) -> web.Response:
+    dl_id = request.match_info["id"]
+    async with get_session() as session:
+        dl_job = await session.get(DeadLetterJob, uuid.UUID(dl_id))
+        if not dl_job:
+            raise web.HTTPNotFound()
+        await session.delete(dl_job)
+        await session.commit()
+    return web.json_response({"status": "discarded"})
