@@ -40,8 +40,10 @@ Clients submit jobs via the broker's REST API. Jobs are written to PostgreSQL. W
 - **Concurrent claiming with no double-processing** -- multiple workers compete for jobs safely using PostgreSQL row-level locking.
 - **Exponential backoff retry** -- failed jobs are retried up to 3 times with a delay of 2^attempts seconds.
 - **Job cancellation** -- pending jobs can be cancelled before a worker claims them.
-- **Metrics endpoint** -- returns job counts grouped by status.
-- **Dashboard UI** -- web interface for monitoring queue health and managing jobs.
+- **Dead letter queue** -- permanently failed jobs are moved to a separate table for inspection, retry, or discard.
+- **Metrics endpoint** -- returns job counts grouped by status, including dead letter count.
+- **Dashboard UI** -- web interface for monitoring queue health, managing jobs, and retrying/discarding dead letter jobs.
+- **Integration tests** -- tests run against real PostgreSQL, including concurrent claiming proof for SKIP LOCKED.
 - **CI via GitHub Actions** -- automated test suite on every push.
 
 ## How SKIP LOCKED Prevents Double-Processing
@@ -116,7 +118,22 @@ curl http://localhost:8000/metrics
 Returns job counts by status:
 
 ```json
-{"pending": 12, "running": 3, "completed": 48, "failed": 2, "cancelled": 1}
+{"pending": 12, "running": 3, "completed": 48, "cancelled": 1, "dead_letter": 2}
+```
+
+### Dead Letter Queue
+
+Jobs that exhaust all retry attempts are moved to a dead letter table. They can be inspected, retried, or permanently discarded.
+
+```bash
+# List dead letter jobs
+curl http://localhost:8000/dead-letter
+
+# Retry a dead letter job (resubmits as a new pending job)
+curl -X POST http://localhost:8000/dead-letter/{id}/retry
+
+# Permanently discard a dead letter job
+curl -X DELETE http://localhost:8000/dead-letter/{id}
 ```
 
 ## Project Structure
@@ -126,8 +143,8 @@ task-queue/
   broker/              REST API (aiohttp)
   worker/              Poll loop and job handlers
   dashboard/           Web UI
-  migrations/          SQL schema
-  tests/               pytest suite
+  migrations/          SQL schema (jobs + dead_letter_jobs)
+  tests/               Unit and integration test suite
   docker-compose.yml
   Dockerfile.broker
   Dockerfile.worker
