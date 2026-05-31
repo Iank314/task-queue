@@ -39,6 +39,19 @@ class TestClaimJob:
         session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_claim_job_sets_lease(self, mock_job):
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_job
+
+        session = AsyncMock()
+        session.execute = AsyncMock(return_value=mock_result)
+
+        job = await claim_job(session)
+
+        assert job.lease_expires_at is not None
+        assert job.lease_expires_at > datetime.now(timezone.utc)
+
+    @pytest.mark.asyncio
     async def test_claim_job_returns_none_when_empty(self):
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None

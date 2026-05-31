@@ -30,6 +30,8 @@ services:
       dockerfile: Dockerfile.worker
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      LEASE_DURATION_SECONDS: ${LEASE_DURATION_SECONDS:-30}
+      REAPER_INTERVAL_SECONDS: ${REAPER_INTERVAL_SECONDS:-15}
     depends_on:
       broker:
         condition: service_started

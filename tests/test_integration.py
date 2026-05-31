@@ -25,7 +25,10 @@ from broker.handlers import (
     submit_job, get_job, list_jobs, cancel_job, get_metrics,
     list_dead_letter, retry_dead_letter, delete_dead_letter,
 )
-from worker.worker import claim_job, complete_job, fail_job
+from worker.worker import (
+    claim_job, complete_job, fail_job, recover_expired_job, extend_lease,
+)
+from datetime import timedelta
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +309,141 @@ class TestConcurrentClaiming:
 
         assert claimed_priorities == sorted(claimed_priorities, reverse=True)
         assert claimed_priorities == [10, 7, 5, 3, 1]
+
+
+# ---------------------------------------------------------------------------
+# Crash recovery – lease + reaper
+# ---------------------------------------------------------------------------
+
+class TestCrashRecovery:
+    """
+    Verify lease-based recovery of jobs whose worker died mid-flight.
+
+    A claimed job carries a lease deadline. If the worker crashes, the lease
+    lapses and the reaper returns the job to the queue (or dead-letters it if
+    its attempts are exhausted) instead of leaving it stranded in 'running'.
+    """
+
+    @pytest.mark.asyncio
+    async def test_claim_sets_lease(self, db_engine, db_session):
+        """Claiming a job stamps a future lease deadline on it."""
+        await _insert_job(db_session)
+
+        Session = sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        async with Session() as ws:
+            claimed = await claim_job(ws)
+
+        assert claimed.lease_expires_at is not None
+        assert claimed.lease_expires_at > datetime.now(timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_expired_lease_recovered_to_pending(self, db_engine, db_session):
+        """A 'running' job with a lapsed lease is returned to 'pending'."""
+        # Simulate a crashed worker: job left running with an expired lease.
+        job = await _insert_job(
+            db_session,
+            status="running",
+            attempts=1,
+            max_attempts=3,
+            lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+
+        Session = sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        async with Session() as ws:
+            recovered = await recover_expired_job(ws)
+
+        assert recovered is True
+        async with Session() as ws:
+            row = await ws.get(Job, job.id)
+            assert row.status == "pending"
+            assert row.attempts == 1  # already counted at claim time, not re-incremented
+            assert row.lease_expires_at is None
+
+    @pytest.mark.asyncio
+    async def test_active_lease_not_recovered(self, db_engine, db_session):
+        """A job whose lease is still in the future is left untouched."""
+        job = await _insert_job(
+            db_session,
+            status="running",
+            attempts=1,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+        )
+
+        Session = sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        async with Session() as ws:
+            recovered = await recover_expired_job(ws)
+
+        assert recovered is False
+        async with Session() as ws:
+            row = await ws.get(Job, job.id)
+            assert row.status == "running"
+
+    @pytest.mark.asyncio
+    async def test_expired_lease_exhausted_goes_to_dead_letter(self, db_engine, db_session):
+        """If a recovered job has no attempts left, it dead-letters."""
+        job = await _insert_job(
+            db_session,
+            type="will_fail",
+            status="running",
+            attempts=3,
+            max_attempts=3,
+            lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+
+        Session = sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        async with Session() as ws:
+            recovered = await recover_expired_job(ws)
+
+        assert recovered is True
+        async with Session() as ws:
+            assert await ws.get(Job, job.id) is None  # gone from jobs table
+            result = await ws.execute(
+                select(DeadLetterJob).where(DeadLetterJob.original_job_id == job.id)
+            )
+            dl = result.scalar_one_or_none()
+            assert dl is not None
+            assert "lease expired" in dl.error
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_extends_lease(self, db_engine, db_session):
+        """A heartbeat pushes the lease deadline further into the future."""
+        job = await _insert_job(
+            db_session,
+            status="running",
+            attempts=1,
+            lease_expires_at=datetime.now(timezone.utc) + timedelta(seconds=5),
+        )
+
+        Session = sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        async with Session() as ws:
+            before = (await ws.get(Job, job.id)).lease_expires_at
+            await extend_lease(ws, job.id)
+
+        async with Session() as ws:
+            after = (await ws.get(Job, job.id)).lease_expires_at
+        assert after > before
+
+    @pytest.mark.asyncio
+    async def test_recovered_job_is_reclaimable(self, db_engine, db_session):
+        """End-to-end: after recovery the job can be claimed by another worker."""
+        await _insert_job(
+            db_session,
+            status="running",
+            attempts=1,
+            max_attempts=3,
+            lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+
+        Session = sessionmaker(db_engine, class_=AsyncSession, expire_on_commit=False)
+        async with Session() as ws:
+            await recover_expired_job(ws)
+
+        # A fresh worker should now be able to pick it up again.
+        async with Session() as ws:
+            reclaimed = await claim_job(ws)
+        assert reclaimed is not None
+        assert reclaimed.status == "running"
+        assert reclaimed.attempts == 2  # second attempt
 
 
 # ---------------------------------------------------------------------------

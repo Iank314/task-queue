@@ -39,6 +39,7 @@ Clients submit jobs via the broker's REST API. Jobs are written to PostgreSQL. W
 - **Priority-based job submission** -- jobs are processed in priority order.
 - **Concurrent claiming with no double-processing** -- multiple workers compete for jobs safely using PostgreSQL row-level locking.
 - **Exponential backoff retry** -- failed jobs are retried up to 3 times with a delay of 2^attempts seconds.
+- **Crash recovery (lease + heartbeat + reaper)** -- if a worker dies mid-job, its lease expires and the job is automatically returned to the queue instead of being stranded in `running`.
 - **Job cancellation** -- pending jobs can be cancelled before a worker claims them.
 - **Dead letter queue** -- permanently failed jobs are moved to a separate table for inspection, retry, or discard.
 - **Metrics endpoint** -- returns job counts grouped by status, including dead letter count.
@@ -59,6 +60,43 @@ LIMIT 1;
 ```
 
 `FOR UPDATE` locks the selected row for the duration of the transaction. `SKIP LOCKED` tells other concurrent transactions to silently skip any rows that are already locked rather than waiting. This means two workers executing the same query at the same instant will always receive different rows -- no double-processing, no contention, no advisory locks needed.
+
+## Crash Recovery: Leases, Heartbeats, and the Reaper
+
+Claiming a job sets its status to `running`. But what if that worker is killed
+(OOM, crash, network partition) before it finishes? Without recovery the job is
+stranded in `running` forever -- no other worker will ever touch it. This is the
+classic at-least-once delivery problem, and the queue solves it the same way SQS
+visibility timeouts and Kafka consumer leases do:
+
+1. **Lease.** When a worker claims a job it stamps a `lease_expires_at` deadline
+   on the row (default 30s out). The lease is a promise: *"I'll finish this, or
+   renew the promise, before this time."*
+
+2. **Heartbeat.** A real job may take longer than one lease. While the handler
+   runs, the worker renews the lease on a timer (every `LEASE_DURATION / 3`) from
+   a separate DB session, pushing the deadline forward. A healthy worker's lease
+   therefore never expires, no matter how long the job legitimately takes.
+
+3. **Reaper.** Every worker also runs a background loop that sweeps for jobs
+   where `status = 'running' AND lease_expires_at < now()` -- the tell-tale sign
+   of a worker that stopped heartbeating. It reclaims them using the *same*
+   `FOR UPDATE SKIP LOCKED` query as claiming, so multiple reapers never fight
+   over the same row.
+
+A dead worker is treated as just another failed attempt: the reaped job flows
+through the normal retry/backoff path, and only dead-letters once its attempts
+are exhausted. Because the attempt is counted at *claim* time (not on success), a
+"poison" job that keeps killing workers is still bounded by `max_attempts` and
+can't be retried forever.
+
+A crash is detected within roughly `LEASE_DURATION + REAPER_INTERVAL` seconds.
+Both are tunable via environment variables (see `.env.example`):
+
+| Variable                  | Default | Meaning                                            |
+|---------------------------|---------|----------------------------------------------------|
+| `LEASE_DURATION_SECONDS`  | `30`    | How long a claim is valid before it must be renewed |
+| `REAPER_INTERVAL_SECONDS` | `15`    | How often each worker sweeps for expired leases     |
 
 ## Quick Start
 

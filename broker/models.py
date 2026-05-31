@@ -24,6 +24,10 @@ class Job(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     run_after = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    # Deadline by which the claiming worker must finish (or heartbeat) the job.
+    # If it lapses while status == 'running', the worker is presumed dead and
+    # the reaper reclaims the job. NULL whenever the job isn't being processed.
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class DeadLetterJob(Base):
